@@ -1,0 +1,53 @@
+function [CR, CI, CR_archive] = VariableClustering_MB_Constraint_Early( ...
+    Population, CR_archive, gen, MaxDVAgen)
+% VariableClustering_MB_Constraint_Early
+% - Performs MB-based constraint DVA only in early generations
+% - Accumulates CR variables over generations
+% - ALWAYS outputs:
+%     CR : accumulated constraint-related variables
+%     CI : remaining constraint-independent variables
+
+    %% Parameters
+    FeasibleThreshold = 0.8;   % stop DVA if most solutions are feasible
+
+    %% Extract decision and constraint data
+    X = Population.decs;   % N x D
+    G = Population.cons;   % N x K
+    [N, D] = size(X);
+
+    %% Compute constraint violation
+    CV = sum(max(0, G), 2);
+
+    %% Check feasibility ratio
+    feasible_ratio = mean(CV == 0);
+
+    %% Flag: whether to perform DVA this generation
+    DoDVA = (gen <= MaxDVAgen) && (feasible_ratio < FeasibleThreshold);
+
+    if DoDVA
+        %% Normalize CV
+        CVmin = min(CV);
+        CVmax = max(CV);
+        CVnorm = (CV - CVmin) ./ (CVmax - CVmin + eps);
+
+        %% Generate surrogate labels (extreme CV samples)
+        cv_thresh = prctile(CVnorm, [30 70]);
+        cv_mask = (CVnorm <= cv_thresh(1)) | (CVnorm >= cv_thresh(2));
+
+        if sum(cv_mask) >= 5
+            cv_label = double(CVnorm(cv_mask) >= cv_thresh(2));
+            X_cv = X(cv_mask, :);
+
+            %% Markov Blanket analysis
+            CR_new = MBAnalysis([X_cv, cv_label], D);
+
+            %% Accumulate CR variables
+            CR_archive = unique([CR_archive, CR_new]);
+        end
+    end
+
+    %% ALWAYS output accumulated CR and remaining CI
+    CR = CR_archive(:)';                 % constraint-related variables
+    CI = setdiff(1:D, CR);               % constraint-independent variables
+
+end
