@@ -1,18 +1,19 @@
-function [CR, CI, CR_archive] = VariableClustering_MB_Constraint_Early( ...
-    Population, CR_archive, gen, MaxDVAgen)
-% VariableClustering_MB_Constraint_Early
-% - Performs MB-based constraint DVA only in early generations
-% - Accumulates CR variables over generations
-% - ALWAYS outputs:
-%     CR : accumulated constraint-related variables
-%     CI : remaining constraint-independent variables
+function [CR, CI, CR_archive, PopArchive] = ...
+    VariableClustering_MB_Constraint_Archive( ...
+        Population, CR_archive, PopArchive, gen, MaxDVAgen)
+% MB-based constraint DVA with population archive
+% - Stores evaluated populations during early evolution
+% - Uses archived data for MB learning
+% - Accumulates CR variables
+% - ALWAYS outputs CR and CI
 
     %% Parameters
     FeasibleThreshold = 0.8;   % stop DVA if most solutions are feasible
+    MinSamples       = 20;    % minimum samples for MB
 
-    %% Extract decision and constraint data
-    X = Population.decs;   % N x D
-    G = Population.cons;   % N x K
+    %% Extract current population
+    X = Population.decs;     % N x D
+    G = Population.cons;     % N x K
     [N, D] = size(X);
 
     %% Compute constraint violation
@@ -21,33 +22,42 @@ function [CR, CI, CR_archive] = VariableClustering_MB_Constraint_Early( ...
     %% Check feasibility ratio
     feasible_ratio = mean(CV == 0);
 
-    %% Flag: whether to perform DVA this generation
+    %% Decide whether DVA is active
     DoDVA = (gen <= MaxDVAgen) && (feasible_ratio < FeasibleThreshold);
 
+    %% Update population archive (only while DVA is active)
     if DoDVA
+        PopArchive.X  = [PopArchive.X;  X];
+        PopArchive.CV = [PopArchive.CV; CV];
+    end
+
+    %% Perform MB-based DVA on archived data
+    if DoDVA && size(PopArchive.X, 1) >= MinSamples
+
+        CVa = PopArchive.CV;
+        Xa  = PopArchive.X;
+
         %% Normalize CV
-        CVmin = min(CV);
-        CVmax = max(CV);
-        CVnorm = (CV - CVmin) ./ (CVmax - CVmin + eps);
+        CVnorm = (CVa - min(CVa)) ./ (max(CVa) - min(CVa) + eps);
 
-        %% Generate surrogate labels (extreme CV samples)
+        %% Extreme CV sampling
         cv_thresh = prctile(CVnorm, [30 70]);
-        cv_mask = (CVnorm <= cv_thresh(1)) | (CVnorm >= cv_thresh(2));
+        mask = (CVnorm <= cv_thresh(1)) | (CVnorm >= cv_thresh(2));
 
-        if sum(cv_mask) >= 5
-            cv_label = double(CVnorm(cv_mask) >= cv_thresh(2));
-            X_cv = X(cv_mask, :);
+        if sum(mask) >= MinSamples
+            labels = double(CVnorm(mask) >= cv_thresh(2));
+            X_mb   = Xa(mask, :);
 
             %% Markov Blanket analysis
-            CR_new = MBAnalysis([X_cv, cv_label], D);
+            CR_new = MBAnalysis([X_mb, labels], D);
 
-            %% Accumulate CR variables
+            %% Accumulate CR
             CR_archive = unique([CR_archive, CR_new]);
         end
     end
 
-    %% ALWAYS output accumulated CR and remaining CI
-    CR = CR_archive(:)';                 % constraint-related variables
-    CI = setdiff(1:D, CR);               % constraint-independent variables
+    %% Final outputs (always defined)
+    CR = CR_archive(:)';
+    CI = setdiff(1:D, CR);
 
 end
