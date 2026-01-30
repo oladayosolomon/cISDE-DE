@@ -1,0 +1,71 @@
+function [FEA, INFEA] = Variable_classification_CMOP(Problem, Population, method)
+% One-shot DVA for constrained multiobjective optimization
+% method:
+%   'pc'   - Population-conditioned variance contrast
+%   'cov'  - Constraint sensitivity via local covariance
+%   'cmpa' - Constraint manifold projection analysis
+
+    X = Population.decs;              % N x D
+    Cons = Population.cons;           % N x K
+    Cons(Cons < 0) = 0;
+    CV = sum(Cons,2);                 % Constraint violation
+    [N,D] = size(X);
+
+    score = zeros(1,D);
+    theta = 1e-6;
+
+    switch lower(method)
+
+        %% ===============================================================
+        case 'pc'   % Population-conditioned DVA
+        %% ===============================================================
+            infea = CV > 0;
+            fea   = CV == 0;
+
+            if sum(infea) < 5 || sum(fea) < 5
+                score = var(X,0,1);
+            else
+                score = var(X(infea,:),0,1) - var(X(fea,:),0,1);
+            end
+
+        %% ===============================================================
+        case 'cov'  % Constraint sensitivity via local covariance
+        %% ===============================================================
+            % Focus on top infeasible solutions
+            [~,idx] = sort(CV,'descend');
+            k = max(round(0.2*N),5);
+            Xif = X(idx(1:k),:);
+
+            % Covariance captures joint sensitivity
+            Sigma = cov(Xif);
+            score = diag(Sigma)';
+
+        %% ===============================================================
+        case 'cmpa' % Constraint Manifold Projection Analysis
+        %% ===============================================================
+            % Select near-boundary infeasible solutions
+            pos = find(CV > 0);
+            if numel(pos) < 5
+                score = var(X,0,1);
+            else
+                Xb = X(pos,:);
+                CVb = CV(pos);
+
+                % Local linear approximation of constraint manifold
+                Xn = (Xb - mean(Xb)) ./ (std(Xb)+eps);
+                CVn = CVb / (max(CVb)+eps);
+
+                % Gradient direction of constraint manifold
+                w = regress(CVn, [ones(size(Xn,1),1), Xn]);
+                score = abs(w(2:end))';
+            end
+
+        otherwise
+            error('Unknown DVA method.');
+    end
+
+    %% Final classification
+    FEA   = find(score > theta);
+    INFEA = setdiff(1:D, FEA);
+
+end
